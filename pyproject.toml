@@ -1,0 +1,13 @@
+[project]
+name = "fterm"
+version = "0.1.0"
+description = "A股现货深度学习量化终端（2万元本金基准）"
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.pyright.off]
+# 无类型检查门槛，保持轻量

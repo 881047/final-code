@@ -1,0 +1,58 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+data/bars/
+data/features/
+data/models/
+data/state/
+data/reports/
+.env
+*.log
+data/panel/
+data/meta/
+data/logs/
+*.pt
+.venv312/
+.venv_cuda/
+data/wheels/
+.zcode/
+.zcodeignore
+.workbuddy-ai/
+# 派生数据面板：可由 scripts/sync_external.py 从老库幂等重建（同 data/panel/ 待遇），
+# 只跟踪 _meta.json（覆盖与指纹台账）。证据包的 stream_*.parquet 照常入库。
+data/external/*.parquet
+# 判据链的逐折中间落盘：stream_*.parquet 是其拼接结果，parts/ 只作断点续跑用
+experiments/*/parts/
+# 判据链 #123 的线性基准消元缓存（panel_rank/panel_gauss .npy，约 1.9GB）：
+# 可由 experiments/ceiling_reconcile_20261013/scripts/reconcile_v2.py 幂等重建
+# （同 parts/ 待遇）；读数摘要 results.json / probe_v2.json / README 照常入库。
+experiments/*/cache_v2/
+# 判据链 #30 强弱预测的**逐日纸面跟踪**：可由 `strength_report.py --backfill`
+# 从缓存预测流幂等重建（同 data/panel/ 待遇）；标定摘要照常入 experiments/。
+data/strength_tracking/
+# 判据链 #31 的**前瞻留痕**：逐日追加，防事后篡改（是证据，不是派生品）。
+# ⚠ 与上面两条不同：它**不可重建**（生产 ema_state 只存最新 as-of）
+# ⇒ 不忽略、随仓 commit。
+# data/avoid_tracking/  ← 故意不忽略
+
+# #124 per-seed 补流：D1 已证可由冻结训练函数逐位重建（同 parts/ 待遇），只入库读数摘要
+experiments/*/parts_perseed/
+
+# #139 EW 逐种子中间产物（可重建；2026-10-16）
+experiments/*/parts_seed/
+
+# #140 1a 逐种子/冒烟中间产物（可重建，adopt_blend parts_perseed 先例；2026-10-16）
+experiments/*/parts_perseed_l2/
+experiments/*/parts_smoke_l2/
+
+# G-det 快照（可由冻结函数重建，不入库；#126 误提交后修正的防再犯规则）
+experiments/*/_*snapshot*.parquet
+
+# 中间产物（可重建，勿入库；2026-10-16 工程卫生整理——防 git add . 误入库，文件保留在磁盘）
+experiments/adopt_blend_20261014/parts_perseed/
+experiments/adopt_blend_20261014/parts_smoke/
+experiments/adopt_blend_20261014/stream_A1.parquet
+experiments/adopt_blend_20261014/stream_A1_smoke.parquet
+experiments/adopt_blend_20261014/logs/
+experiments/reprod_reports_20261013/smoke/

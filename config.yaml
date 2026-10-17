@@ -1,0 +1,158 @@
+# fterm 主配置 —— A股量化终端（Final）
+# 2026-10-03 起由期货终端改造而来，期货域代码已全部移除（docs/03 §14 改造登记）。
+# 纪律：改回测撮合/成本/风控口径的默认值 = 换回测基线，必须在 docs/02-operations.md
+# §参数基线 登记原因与对比。密钥只放 .env，本文件不得出现密钥。
+
+account:
+  initial_equity: 20000          # 设计基准本金（硬约束锚点，与旧盘 2 万构型同源）
+  max_cash_util: 0.95            # 持仓市值/权益上限（现货全额现金，无保证金概念）
+  risk_per_trade: 0.02           # 单票风险预算（ATR止损距离×股数 ≤ 权益×此值）
+  atr_k: 1.2                     # 止损距离 = atr_k × ATR14
+  max_pos_vol_daily: 0.025       # 单仓位日波动上限（占权益，语义沿用期货版 2026-09-26 重定义）
+  daily_stop_loss: 0.03          # 当日浮亏超过 → 停开新仓
+  total_dd_halt: 0.12            # 总回撤熔断线，需人工确认重置
+  circuit_force_liquidate: false # 熔断只拒新开（期货版 docs/03 §13 A/B 判决口径原样继承）
+  max_lots_per_symbol: 10        # 单票手数上限（1手=100股）
+  max_symbols: 3                 # 同时持仓股票数上限
+  # 回撤峰值口径（2026-10-10 新增；docs/03 §36 缺陷登记 / §47 结构性修复）
+  # none    = 全历史累积峰值。**现行生产口径 = 默认值，与修复前逐位一致**。
+  #           已知结构缺陷：halted 只拒新开、不强平 ⇒ 存量随 keep 带清空 ⇒
+  #           权益冻结 ⇒ peak 不变 ⇒ 熔断**永不解除**（吸收态）。实测 halted
+  #           日占比 58–84%，解除需上涨中位 25.3%，3/13 臂从未解除（§36/§46）。
+  # rolling = 滚动窗口峰值（dd_peak_window 交易日）。**无吸收态**（窗口滑出旧高点
+  #           ⇒ peak 必降 ⇒ 自动解除），且**不含任何未来信息**（只由已实现权益
+  #           决定，非 §40 判负的那类前瞻规则）。语义实现单一来源 =
+  #           fterm/risk/peak.py（回测与生产共用，防口径分叉）。
+  #           ⚠ 启用 = 改风险层语义 = **换基线** ⇒ 须 docs/02 登记 + 用户拍板。
+  dd_peak_mode: none
+  dd_peak_window: 252            # rolling 窗口（交易日，约 1 年；仅 rolling 生效）
+  # 自锁可观察性（纯观测，零行为改动）：熔断已触发且权益连续 N 日无变动 ⇒
+  # 落 warn 告警 dd_halt_selflock（缺陷本体 = 吸收态，生产必须能看见自己卡住）。
+  # 0 = 关闭。**不改任何审批行为**，仅新增告警。
+  dd_selflock_warn_days: 60
+
+universe:                        # A股股票池：PIT 过滤器（逐交易日按当日快照过滤）
+  mode: all_a
+  codes: []                      # mode=fixed 时显式 ts_code 列表（如 000001.SZ）
+  exclude_bj: true               # 剔除北交所（30% 板幅 + 流动性，2 万本金不适配）
+  exclude_st: true               # 剔除 ST/退市风险（namechange PIT 口径，含"退"字）
+  min_list_days: 120             # 上市满 120 个交易日（次新股不进池）
+  min_circ_mv_wan: 30000         # 流通市值 ≥ 3 亿（万元口径；流动性下限）
+  min_price: 2.0                 # 剔除仙股/退市整理
+  max_universe: 0                # 打分面截断（0=不截断）
+
+data:
+  old_db: "D:/NEW ECO/data/neweco.db"   # 老库只读契约（同 W2 的 L1：只读不写，本仓不 import 老仓代码）
+  root: data
+  start: "2017-01-01"            # 面板起点：2017 起老库 stk_limit 有真实涨跌停价全量覆盖
+  calendar_tz: "Asia/Shanghai"
+
+features:
+  lookback: 60                   # 模型输入窗口（交易日）
+  momentum_windows: [5, 10, 20, 60]
+  vol_windows: [10, 20]
+  label_horizon: 5               # 标签 horizon：未来 5 日收益
+  label_quantiles: [0.1, 0.9]
+  turnover_window: 20            # 换手率均值窗
+  max_stocks_per_day: 20         # 训练采样密度（0=不采样；CPU 预算闸，见 docs/03 §14）
+
+signal:
+  mode: dlv2                     # dlv2 | halt | rule_reversal | model
+  # 2026-10-04 收口（判据链 #1-#5，docs/03 §15-19）：rule_reversal 被证实为
+  # 负边际构造（输给随机对照），生产信号位空缺，终端进入骨架态（数据链/看板/
+  # 纸面核算照常，零开仓）。候选（LightGBM 周频形态）在带宽确认（链 #6）出
+  # 读数 + 用户填判决词之前不进生产。
+  top_n: 2                       # 目标持仓数（2 万本金构型，1手=100股 离散下实际 1-2 只）
+  exit_buffer: 2                 # 退出带：跌出 top_n×2 才清仓
+  rev_window: 5
+  quiet_vol: true
+  rebalance_weekday: 4           # 周五收盘出信号 → 下周一开盘执行（t+1 开盘撮合）
+  ema_alpha: 0.5                 # dlv2 秩平滑：新秩权重（#11 采纳的 C_ema α=0.5）
+  ema_step: daily                # daily | rebalance
+                                 # ⚠ 生产位取 daily（半衰期≈1 交易日）；判据链 #11/#12/#13
+                                 # 被采纳构型只在调仓日步进（半衰期≈1 周）。用户 2026-10-08
+                                 # 拍板保留 daily 并另立前瞻预注册，故两者不是同一构型，
+                                 # 历史读数只能作先验。详见 docs/02 §参数基线。
+
+model:
+  name: trihead_gru
+  d_hidden: 48                   # GRU 隐层（CPU 轻量）
+  n_layers: 1
+  dropout: 0.1
+  lr: 0.003
+  max_epochs: 60
+  patience: 8                    # 早停
+  seeds: [7, 21, 99]             # 多种子训练，推理集成均值 + 分歧门控（种子稳健性铁律）
+  batch_size: 256
+  revin: false                   # 窗口内实例标准化（继承期货版 P1 判决）
+  sample_weight: none            # none | volz（继承期货版 P2 判决）
+  task: direction                # direction | meta_reversal
+
+backtest:
+  slippage_ticks: 1              # 滑点：1 跳 = 0.01 元/股（t+1 开盘价不利方向）
+  signal_exec_lag: 1             # t 日收盘信号 → t+1 日开盘成交（天然满足 T+1）
+  limit_updown_block: true       # 一字涨跌停不可成交（真实停板价，stk_limit 表）
+
+runtime:
+  state_db: data/state/fterm.db  # SQLite（权益/成交/决策/心跳/告警）
+  heartbeat_minutes: 10          # watchdog 探活间隔
+  train_weekday: 5               # 每周五全量重训
+
+paper_tracks:                    # dlv2 生产位的双账户 paper 盘面（2026-10-05 用户拍板）
+  w2:                            # 2 万真实档：候选信号 + 2 万原生构型（top2）
+    # 用户 2026-10-10 规则：**每次只买 1–2 只股票**（判据链 #23 落地）。
+    # max_symbols 3 → 2：原值允许同时持 3 只，越出规则上限。
+    # 实测影响（w2 档、1871 交易日、忠实账本）：收益 −10.57% → −10.40%（+0.17pp）、
+    # MDD −13.77% → −13.75%、月度配对 t = −0.79（不显著）⇒ **收紧安全**。
+    # top_n=2 / keep_n=4 已在规则内（2 只在 1–2 区间内），不动。
+    equity: 20000
+    top_n: 2                     # 目标持仓数 = 2（规则上限；sizer 打不起时自然 0–1 只）
+    keep_n: 4                    # 退出带 = top_n × exit_buffer(2)
+    max_symbols: 2               # **规则上限 2**（原 3 越界，2026-10-10 收紧）
+    max_lots: 10
+    state_db: data/state/fterm.db
+  t3:                            # 100 万验证档：#12 判决的 T3 构型（top10/keep20）
+    equity: 1000000
+    top_n: 10
+    keep_n: 20
+    max_symbols: 10
+    max_lots: 50
+    state_db: data/state/fterm_100w.db
+
+  w2_blend:                      # #124 采纳影子轨（2026-10-14 用户拍板）：D = 0.5·rank(Ā)+0.5·rank(dlv2)
+    # 部署的是判读验证的原对象（无 EMA，与主轨 C_ema 构型不同，预注册 §0/§4 冻结）；
+    # 前瞻双轨 ≥60 交易日只观测；工件 data/models/a1_production.pt 缺失时本轨自动跳过。
+    signal: blend
+    equity: 20000
+    top_n: 2
+    keep_n: 4
+    max_symbols: 2
+    max_lots: 10
+    state_db: data/state/fterm_blend.db
+
+  w2_tri:                        # #126 T3 三流影子轨（T3 工程单步骤 4，2026-10-15 用户拍板）：
+    # T3 = rank_pct((rank_pct(Ā)+rank_pct(RL2̄)+rank_pct(dlv2))/3)（#126 §0 冻结口径）。
+    # 与 w2_blend 并存观测 ≥60 交易日（只观测不判收益）；工件 data/models/rl_production.pt
+    # 缺失时本轨自动跳过+告警（护主流程）。步骤 2 对账 = 族内一致性口径 PASS（#160 之后的
+    # 工程登记见 plans/tri-production-plan-20261014.md；尾部 19% 日差由前瞻观测兜底）。
+    signal: blend_tri
+    equity: 20000
+    top_n: 2
+    keep_n: 4
+    max_symbols: 2
+    max_lots: 10
+    state_db: data/state/fterm_tri.db
+
+  k100:                          # B8 宽组合观测轨（2026-10-14 用户拍板「按建议执行」；设计 plans/k100-track-design-20261014.md）
+    # 纯测量仪器：k=100 等权（#24 R4 该宽度 t=+2.33 可测），假设资金 1 亿，不服务真实资金；
+    # 信号与主轨同源（signal.mode 现行位）；不作为任何采纳门的主判据（R5 仍以截面量为准）。
+    # 首跑后 3 日内核验：日任务时长增量与状态库体积（设计文档 §5 验收）。
+    equity: 100000000
+    top_n: 100
+    keep_n: 200
+    max_symbols: 100
+    max_lots: 10000
+    state_db: data/state/fterm_k100.db
+
+notify:                          # 可选，留空则只写本地告警表
+  email_to: ""
